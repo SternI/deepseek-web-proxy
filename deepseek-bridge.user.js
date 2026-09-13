@@ -1,6 +1,6 @@
 // ==UserScript==
 // @name         DeepSeek Web Bridge
-// @namespace    https://github.com/your-username/deepseek-web-proxy
+// @namespace    https://github.com/SternI/deepseek-web-proxy
 // @version      1.0.0
 // @description  Automates chat.deepseek.com bridge for local OpenAI-compatible proxy
 // @match        https://chat.deepseek.com/*
