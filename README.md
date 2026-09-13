@@ -2,27 +2,24 @@
 
 OpenAI-compatible local API proxy for DeepSeek Web (`chat.deepseek.com`).
 
-Allows you to use DeepSeek models (**DeepSeek Chat** and **DeepSeek Reasoner / R1**) with any OpenAI-compatible client or SDK.
+Allows you to use DeepSeek models (**DeepSeek Chat** and **DeepSeek Reasoner / R1**) with OpenCode or any OpenAI-compatible client.
 
 ---
 
 ## Disclaimer
 
-This repository is created for **educational and research purposes only**. It demonstrates browser automation, WebSocket bridging, and local reverse proxy architectures. It is not affiliated with, endorsed by, or sponsored by DeepSeek.
+This project is for educational and research purposes only. It is not affiliated with or endorsed by DeepSeek.
 
 ---
 
 ## Features
 
-- **OpenAI Chat Compatibility**: Exposes `http://127.0.0.1:1337/v1/chat/completions` and `/v1/models`.
-- **DeepSeek Reasoner (R1)**: Full support for thinking / reasoning process streamed into standard `reasoning_content` delta chunks.
-- **Native Tool Calling**: Automatically translates tool schemas to the model and parses `<tool_call>` outputs into OpenAI function call structures.
-- **XML Tool Protocol Support**: Compatibility with agent XML tool formats (`<attempt_completion>`, `<ask_followup_question>`).
-- **Real-Time Token Usage Tracking**: Intercepts native token counts (`prompt_tokens`, `completion_tokens`, `total_tokens`, and cache hits).
-- **Auto-Continuation**: Automatically continues generation if DeepSeek pauses on incomplete stream steps.
-- **Chat Management**: Use `/clear`, `/reset`, `/new`, or `/deletecurrentchat` directly in chat to start a fresh conversation session.
-- **Auto-Reset Threshold**: Automatically clears conversation when session token usage exceeds threshold (`--reset-threshold 150000`) to prevent context overflows.
-- **Lightweight**: Pure Python (`aiohttp`) + Tampermonkey userscript with zero heavy browser automation dependencies (no Selenium/Playwright).
+- **OpenAI API Compatibility**: Exposes `http://127.0.0.1:1337/v1/chat/completions` and `/v1/models`.
+- **DeepSeek Reasoner (R1)**: Streams thinking / reasoning process into `reasoning_content` delta chunks in real-time.
+- **Tool Calling**: Translates tool schemas and parses `<tool_call>` outputs into OpenAI function call structures for agent tools (`write`, `edit`, `bash`, `read`).
+- **Real-Time Token Tracking**: Reports native token usage (`prompt_tokens`, `completion_tokens`, `total_tokens`, and cache hits).
+- **Chat Management**: Send `/clear`, `/reset`, or `/new` in chat to start a clean conversation session.
+- **Lightweight**: Pure Python (`aiohttp`) + Tampermonkey script with no heavy automation frameworks.
 
 ---
 
@@ -36,9 +33,9 @@ pip install -r requirements.txt
 
 ### 2. Install Userscript
 
-1. Install Tampermonkey or Violentmonkey in your browser.
+1. Install [Tampermonkey](https://www.tampermonkey.net/) or Violentmonkey in your browser.
 2. Create a new userscript and paste the contents of [`deepseek-bridge.user.js`](./deepseek-bridge.user.js).
-3. Navigate to [chat.deepseek.com](https://chat.deepseek.com/).
+3. Open [chat.deepseek.com](https://chat.deepseek.com/) and log in.
 4. You will see a badge at the bottom-right: **Bridge: Connected (Ready)** once the proxy is running.
 
 ### 3. Start the Proxy
@@ -50,19 +47,55 @@ python deepseek-proxy.py
 Options:
 - `--host 127.0.0.1`: Listening host (default: `127.0.0.1`).
 - `--port 1337`: Listening port (default: `1337`).
-- `--reset-threshold 150000`: Auto-reset chat session if total tokens exceed threshold (default: `150000`, `0` to disable).
+- `--reset-threshold 150000`: Auto-reset chat session if tokens exceed limit (default: `150000`, `0` to disable).
 
 ---
 
-## Client Configration
+## OpenCode Configration
 
-Use these basic settings in any OpenAI-compatible client:
+Add this provider to your OpenCode config (`opencode.jsonc`):
+
+```json
+{
+  "provider": {
+    "deepseek-proxy": {
+      "api": "openai",
+      "name": "DeepSeek Web Proxy",
+      "options": {
+        "baseURL": "http://127.0.0.1:1337/v1",
+        "apiKey": "nah",
+        "timeout": 300000,
+        "chunkTimeout": 300000
+      },
+      "models": {
+        "deepseek-chat": {
+          "id": "deepseek-chat",
+          "name": "DeepSeek Chat (via Web Proxy)",
+          "tool_call": true,
+          "temperature": true
+        },
+        "deepseek-reasoner": {
+          "id": "deepseek-reasoner",
+          "name": "DeepSeek Reasoner (via Web Proxy)",
+          "tool_call": true,
+          "reasoning": true,
+          "temperature": true
+        }
+      }
+    }
+  }
+}
+```
+
+---
+
+## Other Clients (Cline, Cursor, etc.)
 
 - **Base URL**: `http://127.0.0.1:1337/v1`
 - **API Key**: `nah`
 - **Models**:
-  - `deepseek-chat` (standard chat)
-  - `deepseek-reasoner` (thinking / reasoning enabled)
+  - `deepseek-chat`: Standard chat
+  - `deepseek-reasoner`: DeepSeek R1 reasoning
 
 ---
 
@@ -78,11 +111,14 @@ client = OpenAI(
 
 response = client.chat.completions.create(
     model="deepseek-chat",
-    messages=[{"role": "user", "content": "What's Up"}],
+    messages=[{"role": "user", "content": "Hello DeepSeek"}],
     stream=True,
 )
 
 for chunk in response:
+    reasoning = getattr(chunk.choices[0].delta, "reasoning_content", None)
+    if reasoning:
+        print(reasoning, end="", flush=True)
     content = chunk.choices[0].delta.content or ""
     print(content, end="", flush=True)
 ```
@@ -92,8 +128,7 @@ for chunk in response:
 ## Notes & Chat Management
 
 - Keep the browser tab open while using the proxy.
-- If the browser badge shows disconnected, click it to reconnect immediately.
-- Auto-resets the browser chat when session tokens reach 150k (configurable via `--reset-threshold`) to prevent context overflows.
+- If the badge shows disconnected, click it to reconnect immediately.
 - To reset manually, send `/clear`, `/reset`, or `/new` directly from your client prompt (or run `window.deleteCurrentChat()` in the browser console).
 
 ---
