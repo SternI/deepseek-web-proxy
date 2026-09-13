@@ -135,7 +135,9 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
     await ws.prepare(request)
 
     active_ws = ws
-    print("\033[92m[Bridge]\033[0m DeepSeek browser tab connected!")
+    print(
+        f"\033[92m[Bridge]\033[0m DeepSeek browser tab connected! (Remote: {request.remote})"
+    )
 
     try:
         async for msg in ws:
@@ -156,10 +158,14 @@ async def websocket_handler(request: web.Request) -> web.WebSocketResponse:
     finally:
         if active_ws == ws:
             active_ws = None
+        orphaned = 0
         for fut in list(pending_jobs.values()):
             if not fut.done():
                 fut.set_result({"error": "Browser tab disconnected mid-request."})
-        print("\033[93m[Bridge]\033[0m DeepSeek browser tab disconnected.")
+                orphaned += 1
+        print(
+            f"\033[93m[Bridge]\033[0m DeepSeek browser tab disconnected (cleaned up {orphaned} pending jobs)."
+        )
 
     return ws
 
@@ -653,7 +659,7 @@ _last_job_time: float = 0.0
 MIN_JOB_INTERVAL: float = 1.5  # seconds between submissions to prevent rate limiting
 
 
-async def run_browser_job(prompt: str, thinking: bool) -> dict:
+async def run_browser_job(prompt: str, thinking: bool, model: str = "") -> dict:
     """Send the prompt to the browser and await its reply."""
     global _last_job_time
     async with job_lock():
@@ -675,12 +681,19 @@ async def run_browser_job(prompt: str, thinking: bool) -> dict:
                     {
                         "id": req_id,
                         "prompt": prompt,
+                        "model": model,
                         "thinkingEnabled": bool(thinking),
                     }
                 )
             )
+            t0 = time.time()
             res = await asyncio.wait_for(future, timeout=JOB_TIMEOUT)
             _last_job_time = time.time()
+            elapsed = time.time() - t0
+            resp_len = len(res.get("text", "")) if isinstance(res, dict) else 0
+            print(
+                f"\033[94m[Bridge]\033[0m Job {req_id} completed in {elapsed:.2f}s ({resp_len} chars)"
+            )
             return res
         except asyncio.TimeoutError:
             _last_job_time = time.time()
@@ -858,7 +871,7 @@ async def handle_chat_completions(request: web.Request) -> web.Response:
         f"mode={mode} tools={len(tool_names)} reasoner={is_reasoner} cline={is_cline}"
     )
 
-    result = await run_browser_job(prompt, is_reasoner)
+    result = await run_browser_job(prompt, is_reasoner, model=model)
 
     if "error" in result:
         return error_response(result["error"], 502, "server_error")

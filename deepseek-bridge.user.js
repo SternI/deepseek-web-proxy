@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         DeepSeek Web Bridge
 // @namespace    https://github.com/your-username/deepseek-web-proxy
-// @version      1.1.0
+// @version      1.0.0
 // @description  Automates chat.deepseek.com bridge for local OpenAI-compatible proxy
 // @match        https://chat.deepseek.com/*
 // @grant        none
@@ -18,7 +18,7 @@
   window.__DEEPSEEK_BRIDGE_INITIALIZED__ = true;
 
   const WS_URL = "ws://127.0.0.1:1337/ws";
-  const JOB_TIMEOUT_MS = 360_000;
+  const JOB_TIMEOUT_MS = 600_000;
 
   const isCompletionUrl = (url) => {
     if (!url) return false;
@@ -26,7 +26,10 @@
     return s.includes("/api/v0/chat/completion") || s.includes("/api/v0/chat/continue");
   };
 
-  const log = (msg, color = "#38bdf8") => console.log(`%c[DeepSeek Bridge] ${msg}`, `color:${color};font-weight:bold;`);
+  const log = (msg, color = "#38bdf8") => {
+    const time = new Date().toLocaleTimeString();
+    console.log(`%c[DeepSeek Bridge ${time}] ${msg}`, `color:${color};font-weight:bold;`);
+  };
 
   const badge = document.createElement("div");
   badge.id = "deepseek-bridge-badge";
@@ -75,14 +78,27 @@
     }
     if (state === "connected") {
       dot.style.backgroundColor = "#10b981";
-      text.textContent = message || "Bridge: Connected";
+      text.textContent = message || "Bridge: Connected (Ready)";
     } else if (state === "busy") {
       dot.style.backgroundColor = "#f59e0b";
-      text.textContent = message || "Bridge: Generating...";
+      text.textContent = message || "Bridge: Working...";
     } else {
       dot.style.backgroundColor = "#ef4444";
       text.textContent = message || "Bridge: Disconnected";
     }
+  }
+
+  async function waitForIdle(maxWaitMs = 8_000) {
+    const start = Date.now();
+    while (Date.now() - start < maxWaitMs) {
+      const stopBtn = document.querySelector(
+        "button[aria-label*='Stop'], .ds-button--primary[aria-label*='Stop'], div[role='button']._52c986b--stop"
+      );
+      if (!stopBtn) return true;
+      updateBadge("busy", "Bridge: Waiting for previous turn to finish...");
+      await new Promise((r) => setTimeout(r, 120));
+    }
+    return true;
   }
 
   if (document.body) {
@@ -682,12 +698,12 @@
 
     ws.onopen = () => {
       log("Connected to proxy", "lime");
-      updateBadge("connected", "Bridge: Connected");
+      updateBadge("connected", "Bridge: Connected (Ready)");
     };
 
     ws.onclose = () => {
       if (activeWs === ws) activeWs = null;
-      updateBadge("disconnected", "Bridge: Disconnected (Click to retry)");
+      updateBadge("disconnected", "Bridge: Disconnected");
       reconnectTimer = setTimeout(connect, 3_000);
     };
 
@@ -717,9 +733,13 @@
         return;
       }
 
-      const { id, prompt, thinkingEnabled } = payload;
-      log(`Submitting prompt (${prompt.length} chars)...`, "#facc15");
-      updateBadge("busy", "Bridge: Generating...");
+      const { id, prompt, model, thinkingEnabled } = payload;
+      const isReasoner = Boolean(thinkingEnabled) || (model && (model.includes("reasoner") || model.includes("r1")));
+      const t0 = Date.now();
+      log(`[WS] Incoming prompt (${prompt.length} chars, ID: ${id})...`, "#facc15");
+      updateBadge("busy", "Bridge: Submitting...");
+
+      await waitForIdle(8_000);
 
       const parser = new SSEParser();
       let timeoutId;
@@ -758,8 +778,10 @@
           throw new Error("Chat input not found. Make sure DeepSeek is loaded.");
         }
 
+        updateBadge("busy", "Bridge: Generating stream...");
+
         submitFn(prompt, {
-          thinkingEnabled: Boolean(thinkingEnabled),
+          thinkingEnabled: Boolean(isReasoner),
           searchEnabled: false,
           uploadFileSupported: true,
           interruptAndSendEnabled: true,
@@ -774,16 +796,39 @@
 
         const result = await Promise.race([capturePromise, timeoutPromise]);
         clearTimeout(timeoutId);
-        updateBadge("connected", "Bridge: Connected");
+        const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+        updateBadge("connected", `Bridge: Connected (Done in ${elapsed}s)`);
+        log(`[WS] Completed prompt ${id} in ${elapsed}s`, "#10b981");
         ws.send(JSON.stringify({ id, ...result }));
       } catch (err) {
         clearTimeout(timeoutId);
         _pendingCapture = null;
-        updateBadge("connected", "Bridge: Connected");
+        updateBadge("connected", "Bridge: Ready");
+        log(`[WS] Request ${id} failed: ${err.message}`, "#ef4444");
         ws.send(JSON.stringify({ id, error: String(err) }));
       }
     };
   }
+
+  window.__deepseekBridge = {
+    get wsState() {
+      if (!activeWs) return "NONE";
+      return ["CONNECTING", "OPEN", "CLOSING", "CLOSED"][activeWs.readyState] || "UNKNOWN";
+    },
+    get isBusy() {
+      const stopBtn = document.querySelector("button[aria-label*='Stop']");
+      return Boolean(stopBtn);
+    },
+    get currentSessionId() {
+      return getCurrentSessionId();
+    },
+    get submitFn() {
+      return window.mySubmit || locateSubmit();
+    },
+    locateSubmit: () => locateSubmit(),
+    reconnect: () => connect(),
+    reset: () => window.deleteCurrentChat(),
+  };
 
   badge.addEventListener("click", () => {
     log("Reconnecting to proxy...", "#facc15");
